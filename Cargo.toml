@@ -1,0 +1,15 @@
+[package]
+name = "buddhabrot"
+version = "0.1.0"
+authors = ["nnmm <nnmmgit@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bincode = "1.2.1"
+image = "0.22.3"
+ndarray = { version = "0.13.0", features = ["serde"] }
+num = { version = "0.2.0", features = ["serde"] }
+palette = "0.5.0"
+serde = { version = "1.0.104", features = ["derive"] }
