@@ -1,5 +1,5 @@
-use image::{GrayImage, ImageBuffer};
-use ndarray::{azip, Array, Array2};
+use image::{GrayImage, ImageBuffer, RgbImage};
+use ndarray::{azip, Array, Array2, Array3};
 use num::Complex;
 use num::Zero;
 use serde::{Deserialize, Serialize};
@@ -108,6 +108,27 @@ impl Orbit {
     }
 }
 
+type Extra = f64;
+
+struct OrbitExtra {
+    orbit: Orbit,
+    extra: Extra,
+}
+
+use std::ops::{Deref, DerefMut};
+impl Deref for OrbitExtra {
+    type Target = Orbit;
+    fn deref(&self) -> &Self::Target {
+        &self.orbit
+    }
+}
+
+impl DerefMut for OrbitExtra {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.orbit
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct MandelbrotSet {
     area: ComplexArea,
@@ -116,11 +137,11 @@ struct MandelbrotSet {
 }
 
 impl MandelbrotSet {
-    fn make_iterations(&self) -> Vec<Orbit> {
+    fn make_iterations(&self) -> Vec<OrbitExtra> {
         let mut orbits = Vec::with_capacity(self.area.res_re * self.area.res_im / 4);
         azip!((&c in &self.c, &diverged in &self.diverged) {
             if diverged {
-                let orbit = Orbit::new(c);
+                let orbit = OrbitExtra { orbit: Orbit::new(c), extra: c.re };
                 orbits.push(orbit);
             }
         });
@@ -140,38 +161,55 @@ impl MandelbrotSet {
 }
 
 struct DensityMap {
-    orbits: Vec<Orbit>,
+    orbits: Vec<OrbitExtra>,
     area: ComplexArea,
-    number: Array2<u64>,
+    density: Array2<u64>,
+    re: Array2<f64>,
 }
 
 impl DensityMap {
-    pub fn new(area: ComplexArea, orbits: Vec<Orbit>) -> Self {
+    pub fn new(area: ComplexArea, orbits: Vec<OrbitExtra>) -> Self {
         Self {
             orbits,
             area,
-            number: Array2::zeros((area.res_re, area.res_im)),
+            density: Array2::zeros((area.res_re, area.res_im)),
+            re: Array2::zeros((area.res_re, area.res_im)),
         }
     }
 
-    fn register(&mut self, z: Complex<f64>) {
+    fn register(&mut self, z: Complex<f64>, extra: Extra) {
         match self.area.discretize(z) {
             Some(coords) => {
-                self.number[coords] += 1;
+                self.density[coords] += 1;
+                self.re[coords] += extra;
             }
             None => (),
         }
     }
 
-    pub fn run(mut self) -> Array2<u64> {
+    pub fn run(mut self) -> Array3<u8> {
         let orbits = std::mem::replace(&mut self.orbits, Vec::new());
         for mut orb in orbits {
             while !orb.diverged() {
                 orb.tick();
-                self.register(orb.z);
+                self.register(orb.z, orb.extra);
             }
         }
-        self.number
+
+        let max_density = self.density.fold(0, |a, b| a.max(*b));
+        let density = self.density.mapv(|d| d as f64 / max_density as f64);
+        let max_colorness = self.re.fold(0.0, |a: f64, b| a.max(*b));
+        let colorness = self.re.map(|d| d / max_colorness);
+        // Curve
+        let density = density.mapv(|x| x.powf(0.33));
+        let mut buf = Array3::zeros((density.shape()[0], density.shape()[1], 3));
+        azip!((mut pix in buf.genrows_mut(), &r in &density, &g in &colorness) {
+            pix[0] = (255.0 * r) as u8;
+            // pix[1] = (255.0 * g) as u8;
+            // pix[2] = (255.0 * b) as u8;
+        });
+
+        buf
     }
 }
 
@@ -185,8 +223,8 @@ fn try_main() -> Result<(), String> {
         let area = ComplexArea {
             min_corner: Complex::new(-2.0, -1.25),
             max_corner: Complex::new(1.0, 1.25),
-            res_re: 6000,
-            res_im: 5000,
+            res_re: 12000,
+            res_im: 10000,
         };
         println!(
             "Calculating Mandelbrot set for resolution {} x {} with {} iterations",
@@ -218,17 +256,15 @@ fn try_main() -> Result<(), String> {
         ..diverged.area
     };
     let dm = DensityMap::new(render_area, orbits);
-    let density = dm.run();
-    // Step 3: Color mapping (interactive)
+    let buf = dm.run();
+    // Step 3: Color mapping (todo: interactive?)
     // Step 4: Save image
-    let max_density = density.fold(0, |a, b| a.max(*b));
-    let buf = density.map(|d| ((d * 255) / max_density) as u8);
-    let img: GrayImage = ImageBuffer::from_raw(
+    let img: RgbImage = ImageBuffer::from_raw(
         u32::try_from(render_area.res_im).unwrap(),
         u32::try_from(render_area.res_re).unwrap(),
         buf.into_raw_vec(),
     )
     .unwrap();
-    img.save("debug.png").unwrap();
+    img.save("buddhabrot.png").unwrap();
     Ok(())
 }
